@@ -1,6 +1,7 @@
 ===== Operating Systems I, Project One =====
-Author: 	Grant Kurtz
-Professor: 	J. Brown
+Author: 		Grant Kurtz
+Professor: 		J. Brown
+VCS:			git (https://github.com/grnt426/OS1_Project)
 
 Description:	A Command Line Utility that can proceess input and run the 
 				associated task in the foreground or background.
