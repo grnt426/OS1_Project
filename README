@@ -1,0 +1,6 @@
+===== Operating Systems I, Project One =====
+Author: 	Grant Kurtz
+Professor: 	J. Brown
+
+Description:	A Command Line Utility that can proceess input and run the 
+				associated task in the foreground or background.
