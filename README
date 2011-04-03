@@ -4,4 +4,16 @@ Professor: 		J. Brown
 VCS:			git (https://github.com/grnt426/OS1_Project)
 
 Description:	A Command Line Utility that can proceess input and run the 
-				associated task in the foreground or background.
+				associated task in the foreground or background.  Keeps a list
+				of the previously typed 20 commands and ensures the user does
+				not provide empty or whitespace padded commands.
+				
+KNOWN BUGS:		
+				Typing "history" and then immediately hitting ctrl-C causes
+				the signal handler function to read an infinte number of
+				SIGSEGV.  Reason is unknown.
+				
+				Running a process in the backgruond will work, but will always
+				cause that command to run in the background regardless if the
+				'&' is present or not.  It seems that strtok() is the culprit
+				but not certain.

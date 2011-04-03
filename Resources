@@ -11,3 +11,6 @@ Linked List Implementation:
 
 Trimming Leading/Trailing whitespace:
 4) http://stackoverflow.com/questions/122616/painless-way-to-trim-leading-trailing-whitespace-in-c
+
+Unix Signals:
+5) http://www.cs.pitt.edu/~alanjawi/cs449/code/shell/UnixSignals.htm

@@ -54,7 +54,41 @@ int main(int argc, char *argv[]){
 	signal_action.sa_handler = handler_function;
 	signal_action.sa_flags = 0;
 	sigemptyset(&signal_action.sa_mask);
+	
+	// tell the signal handler that we want to listen to the list of signals
+	// below
+	sigaction(SIGHUP, &signal_action, NULL);
 	sigaction(SIGINT, &signal_action, NULL);
+	sigaction(SIGQUIT, &signal_action, NULL);
+	sigaction(SIGILL, &signal_action, NULL);
+	sigaction(SIGTRAP, &signal_action, NULL);
+	sigaction(SIGABRT, &signal_action, NULL);
+	sigaction(SIGEMT, &signal_action, NULL);
+	sigaction(SIGFPE, &signal_action, NULL);
+	sigaction(SIGKILL, &signal_action, NULL);
+	sigaction(SIGBUS, &signal_action, NULL);
+	sigaction(SIGSEGV, &signal_action, NULL);
+	sigaction(SIGSYS, &signal_action, NULL);
+	sigaction(SIGPIPE, &signal_action, NULL);
+	sigaction(SIGALRM, &signal_action, NULL);
+	sigaction(SIGTERM, &signal_action, NULL);
+	sigaction(SIGUSR1, &signal_action, NULL);
+	sigaction(SIGUSR2, &signal_action, NULL);
+	sigaction(SIGCHLD, &signal_action, NULL);
+	sigaction(SIGPWR, &signal_action, NULL);
+	sigaction(SIGWINCH, &signal_action, NULL);
+	sigaction(SIGURG, &signal_action, NULL);
+	sigaction(SIGPOLL, &signal_action, NULL);
+	sigaction(SIGSTOP, &signal_action, NULL);
+	sigaction(SIGTSTP, &signal_action, NULL);
+	sigaction(SIGCONT, &signal_action, NULL);
+	sigaction(SIGTTIN, &signal_action, NULL);
+	sigaction(SIGTTOU, &signal_action, NULL);
+	sigaction(SIGVTALRM, &signal_action, NULL);
+	sigaction(SIGPROF, &signal_action, NULL);
+	sigaction(SIGXCPU, &signal_action, NULL);
+	sigaction(SIGXFSZ, &signal_action, NULL);
+	sigaction(SIGWAITING, &signal_action, NULL);
 	
 	// initialization setup
 	alive = true;
@@ -65,13 +99,6 @@ int main(int argc, char *argv[]){
 		// provide prompt and wait for input
 		write(0, "OS1Shell -> ", 12);
 		int r = read(0, buf, MAX_BUF_SIZE);
-		
-		// make sure we didn't read the contents of a signal
-		if(donotread){
-			donotread = false;
-			resetBuf(buf);
-			continue;
-		}
 		
 		// handle odd read values
 		// if nothing was read, assume ^D was sent
@@ -84,9 +111,6 @@ int main(int argc, char *argv[]){
 		else if(r == 1){
 			fflush(stdout);
 			continue;
-		}
-		else if(r < 0){
-			cerr << "An error occured while reading input\n";
 		}
 		
 		// if we read a full buffer but the last character is not a newline
@@ -110,7 +134,14 @@ int main(int argc, char *argv[]){
 		// trim all whitespace
 		trim(buf);
 		if(buf[0] == 0){
-			cerr << "All this space is killing me!\n";
+			
+			// don't print an error if it is a signal
+			if(!donotread){
+				cerr << "All this space is killing me!\n";	
+			}
+			else{
+				donotread = false;
+			}
 			resetBuf(buf);
 			continue;
 		}
@@ -121,7 +152,7 @@ int main(int argc, char *argv[]){
 			tail = history;
 			history->prev = 0;
 			history->next = 0;
-			strncpy(history->command, buf, MAX_BUF_SIZE);			
+			strncpy(history->command, buf, r-1);			
 			curHistSize = 1;
 		}
 		else{
@@ -131,7 +162,7 @@ int main(int argc, char *argv[]){
 			com->prev = tail;
 			tail = com;
 			tail->next = 0;
-			strncpy(com->command, buf, MAX_BUF_SIZE);
+			strncpy(com->command, buf, r-1);
 			curHistSize += 1;
 			
 			// make sure our history doesn't grow beyond the max size
@@ -145,12 +176,20 @@ int main(int argc, char *argv[]){
 		
 		// tokenize the string
 		char *args[r];
-		tokens = strtok(buf, " \n"); 
-		int i = 0;	
+		tokens = strtok(buf, " \n");
+		int i = 0;
+		bool runInBG = false;
 		while((args[i] = tokens) != NULL){
 			tokens = strtok(NULL, " \n");
+			if(tokens != NULL && strcmp(tokens, "&") == 0){
+				runInBG = true;
+			}
 			i++;
 		}
+		
+		// if we read ar argument, pad the end of the array with a nul-byte
+		if(i > 1)
+			args[i-1] = (char*)0;
 		
 		// check if we are running a shell-specific command
 		if(strcmp(buf, "history") == 0){
@@ -158,30 +197,29 @@ int main(int argc, char *argv[]){
 			continue;
 		}
 		
-		//cout << "COM: (" << buf << ", " << *args << ")\n";
-		
 		// Run the command
 		pid_t childPID;
 		int childStatus;
 		
+		// create a new process
 		childPID = fork();
 		
 		// If zero, then this is the child running
 		if(childPID == 0){
 			
-			// execute the command
-			execvp(buf, argv);
+			// execute the command			
+			execvp(args[0], args);
 			
 			// if we reached here, the command was invalid
-			cout << "Bad command!" << endl;
+			cerr << "\nBad command!" << endl;
 		}
-		else{
+		else if(!runInBG){
 			
 			// this is done by the parent
 			pid_t tpid;
 			do{
 				tpid = wait(&childStatus);
-				//if(tpid != childPID) process_terminated(tpid);
+				if(tpid != childPID) processTerminated(tpid);
 			}while(tpid != childPID);
 			
 			//cout << "Status of Child: " << childStatus << endl;
@@ -194,11 +232,11 @@ int main(int argc, char *argv[]){
 }
 
 void printHistory(node *comHist){
-	if(comHist == 0)
-		return;
-	cout << comHist->command << endl;
-	printHistory(comHist->next);
-	fflush(stdout);
+	while(comHist != NULL){
+		cout << comHist->command << endl;
+		comHist = comHist->next;
+	}
+	//fflush(stdout);
 }
 
 void handler_function(int sig_id){
@@ -206,6 +244,8 @@ void handler_function(int sig_id){
 		cout << endl;
 		printHistory(history);
 	}
+	else
+		cout << "\nCaught Signal: " << sig_id << endl;
 	donotread = true;
 }
 
@@ -251,12 +291,14 @@ char *trim(char *str){
     return str;
 }
 
-/*
 void processTerminated(int childPID){
-	cout << "Child Process terminated: " << childPID << endl;
+	
+	// don't print termination messages if the process didn't come from a 
+	// forked background process
+	if(childPID > 0)
+		cout << "Child Process terminated: " << childPID << endl;
 }
 
-*/
 void resetBuf(char* buf){
 	memset(buf, 0, sizeof(buf));
 }
