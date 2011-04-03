@@ -1,10 +1,13 @@
 Resources Used:
 
 Exec/Fork Example:
-http://www.cs.ecu.edu/karl/4630/sum01/example1.html
+1) http://www.cs.ecu.edu/karl/4630/sum01/example1.html
 
 C++ Function References And Basic C++ Stuff:
-cplusplus.com/reference
+2) cplusplus.com/reference
 
 Linked List Implementation:
-http://www.codeproject.com/KB/cpp/linked_list.aspx
+3) http://www.codeproject.com/KB/cpp/linked_list.aspx
+
+Trimming Leading/Trailing whitespace:
+4) http://stackoverflow.com/questions/122616/painless-way-to-trim-leading-trailing-whitespace-in-c
