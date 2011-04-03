@@ -24,6 +24,7 @@ int MAX_BUF_SIZE = 64;
 int MAX_HIST_LEN = 20;
 bool donotread = false;
 
+// a node struct for our doubly-linked list
 typedef struct node{
 	char command[64];
 	node *next;
@@ -34,6 +35,7 @@ typedef struct node{
 node *history = NULL;
 node *tail = NULL;
 
+// functions
 void printHistory(node *history);
 void handler_function(int sig_id);
 char *trim(char *str);
@@ -94,6 +96,7 @@ int main(int argc, char *argv[]){
 	alive = true;
 	resetBuf(buf);
 	
+	// continue reading input forever
 	while(alive){
 		
 		// provide prompt and wait for input
@@ -148,27 +151,43 @@ int main(int argc, char *argv[]){
 		
 		// alright, the command is good, add to our history for recall
 		if(curHistSize == 0){
+		
+			// create our first node
 			history = (node*)malloc(sizeof(node));
 			tail = history;
 			history->prev = 0;
 			history->next = 0;
+			
+			// copy over the command's contents (excluding the new-line)
 			strncpy(history->command, buf, r-1);			
 			curHistSize = 1;
 		}
 		else{
+		
+			// create the new node
 			node *com;
 			com = (node*)malloc(sizeof(node));
+			
+			// properly link everything for the linked list
 			tail->next = com;
 			com->prev = tail;
 			tail = com;
 			tail->next = 0;
+			
+			// copy over the command's contents (excluding the new-line) 
 			strncpy(com->command, buf, r-1);
 			curHistSize += 1;
 			
 			// make sure our history doesn't grow beyond the max size
 			if(curHistSize > MAX_HIST_LEN){
+			
+				// temp copy of head node
 				node *toBeFreed = history;
+				
+				// set the head to be the 2nd oldest command
 				history = history->next;
+				
+				// we don't need the old head anymore, free it up
 				free(toBeFreed);
 				curHistSize -= 1;
 			}
@@ -179,15 +198,20 @@ int main(int argc, char *argv[]){
 		tokens = strtok(buf, " \n");
 		int i = 0;
 		bool runInBG = false;
+		
+		// read all tokens
 		while((args[i] = tokens) != NULL){
 			tokens = strtok(NULL, " \n");
+			
+			// if a token contains the &, then we need to run the command
+			// in the background
 			if(tokens != NULL && strcmp(tokens, "&") == 0){
 				runInBG = true;
 			}
 			i++;
 		}
 		
-		// if we read ar argument, pad the end of the array with a nul-byte
+		// if we read an argument, pad the end of the array with a nul-byte
 		if(i > 1)
 			args[i-1] = (char*)0;
 		
@@ -219,26 +243,42 @@ int main(int argc, char *argv[]){
 			pid_t tpid;
 			do{
 				tpid = wait(&childStatus);
+				
+				// catch any processes that may have terminated while we were
+				// busy with the user
 				if(tpid != childPID) processTerminated(tpid);
 			}while(tpid != childPID);
 			
 			//cout << "Status of Child: " << childStatus << endl;
 		}
+		
+		// make sure nothing is sitting in the buffer
 		fflush(stdout);
 		
-		// clear the buffer
+		// clear the input buffer for the next read
 		resetBuf(buf);
 	}
 }
 
+/*
+* Prints the last MAX_HIST_LEN of valid commands the user has entered.
+*
+* @param	comHist			pointer to the head (last command entered) of the
+*							history list
+*/
 void printHistory(node *comHist){
 	while(comHist != NULL){
 		cout << comHist->command << endl;
 		comHist = comHist->next;
 	}
-	//fflush(stdout);
 }
 
+/*
+* Handles processing of all signals captured by our process
+*
+* @param	sig_id			an integer representing the signal that was 
+*							captured
+*/
 void handler_function(int sig_id){
 	if(sig_id == 2){
 		cout << endl;
@@ -253,44 +293,51 @@ void handler_function(int sig_id){
 * Trims all leading and trailing whitespace
 * Source: (Reference: 4)
 *
-* @returns			a pointer to the modified char array
+* @param	str			the string to rid of whitespace
+*
+* @returns				a pointer to the modified char array
 */
 char *trim(char *str){
-    size_t len = 0;
-    char *frontp = str - 1;
-    char *endp = NULL;
+	size_t len = 0;
+	char *frontp = str - 1;
+	char *endp = NULL;
 
-    if( str == NULL )
-            return NULL;
+	if( str == NULL )
+		return NULL;
 
-    if( str[0] == '\0' )
-            return str;
+	if( str[0] == '\0' )
+		return str;
 
-    len = strlen(str);
-    endp = str + len;
+	len = strlen(str);
+	endp = str + len;
 
-    /* Move the front and back pointers to address
-     * the first non-whitespace characters from
-     * each end.
-     */
-    while( isspace(*(++frontp)) );
-    while( isspace(*(--endp)) && endp != frontp );
+	/* Move the front and back pointers to address
+	* the first non-whitespace characters from
+	* each end.
+	*/
+	while( isspace(*(++frontp)) );
+	while( isspace(*(--endp)) && endp != frontp );
 
-    if( str + len - 1 != endp )
-            *(endp + 1) = '\0';
-    else if( frontp != str &&  endp == frontp )
-            *str = '\0';
+	if( str + len - 1 != endp )
+		*(endp + 1) = '\0';
+	else if( frontp != str &&  endp == frontp )
+		*str = '\0';
 
-    endp = str;
-    if( frontp != str )
-    {
-            while( *frontp ) *endp++ = *frontp++;
-            *endp = '\0';
-    }
+	endp = str;
+	if( frontp != str ){
+		while( *frontp ) *endp++ = *frontp++;
+			*endp = '\0';
+	}
 
-    return str;
+	return str;
 }
 
+/*
+* Just prints that a process we had forked and ran in the background finished 
+* running and has exited.
+*
+* @param	childPID		the process ID of the process that just exit
+*/
 void processTerminated(int childPID){
 	
 	// don't print termination messages if the process didn't come from a 
@@ -299,6 +346,11 @@ void processTerminated(int childPID){
 		cout << "Child Process terminated: " << childPID << endl;
 }
 
+/*
+* Resets all characters of a given char array to nul-bytes
+*
+* @param	buf				character array to be cleaned up
+*/
 void resetBuf(char* buf){
 	memset(buf, 0, sizeof(buf));
 }
