@@ -44,12 +44,39 @@ void processTerminated(int childPID);
 
 
 int main(int argc, char *argv[]){
-		
+	
+	// first, let's check that we got the correct number of arguments
+	if(argc != 2){
+		cerr << "Usage: " << *argv << " filesystem\n";
+		exit(1);
+	}
+
 	// vars
 	char buf[MAX_BUF_SIZE-1];
 	char* tokens;
 	bool alive;
 	int curHistSize = 0;
+	char fsname[sizeof(argv[1])];
+	FILE * filesystem;
+	memcpy(&fsname, argv[1], sizeof(argv[1]));
+	
+	
+	// check if the filesystem already exists
+	filesystem = fopen(fsname, "r");
+	if(!filesystem){
+		
+		// looks like we need to create the filesystem
+		//filesystem = createFileSystem(&fsname);
+		
+		// set our newly created filesystem as our current directory
+		
+	}
+	else{
+		
+		// since the filesystem already exists, load its BR into memory and
+		// make sure everything checks out
+		
+	}
 
 	// define our signal handler
 	struct sigaction signal_action;
