@@ -50,6 +50,7 @@ char* trim(char* str);
 void resetBuf(char* buf);
 void processTerminated(int childPID);
 void clearInput();
+bool checkFSIntegrity(mbr * MBR);
 
 /*
 * The mother of all main functions
@@ -146,10 +147,36 @@ int main(int argc, char *argv[]){
 	}
 	else{
 		
-		// since the filesystem already exists, load its MBR into memory and
-		// make sure everything checks out
+		// since the filesystem already exists, load its MBR into memory
 		mbr *MBR = (mbr*)malloc(sizeof(mbr));
 		fread(MBR, sizeof(int), sizeof(MBR), filesystem);
+		
+		// do some basic checking to make sure the MBR isn't corrupt or
+		// worthless		
+		if(checkFSIntegrity(MBR)){
+			
+			// prompt user asking if they really want to keep using the
+			// specified filesystem
+			printf("Are you sure you still want to use this filesystem [N]? ");
+			fflush(stdout);
+			int r = read(0, buf, MAX_BUF_SIZE);
+			if(strcmp(buf, "n") || r == 1){
+				
+				// delete the MBR
+				free(MBR);
+				
+				// clear the filesystem name
+				memset(fsname, sizeof(fsname), '\0');
+				
+				// let the user know that the filesystem has been discarded
+				cout << "Filesystem not loaded!\n";
+			}
+			
+			// Alright, then the user must know what they are doing!
+			else if(strcmp(buf, "y")){
+				cout << "Alright, the filesystem will try to be loaded...\n";
+			}
+		}
 	}
 
 	// define our signal handler
@@ -442,6 +469,53 @@ void processTerminated(int childPID){
 	// forked background process
 	if(childPID > 0)
 		cout << "Child Process terminated: " << childPID << endl;
+}
+
+bool checkFSIntegrity(mbr * MBR){
+	
+	bool problemsFound = false;
+	
+	if(MBR->cluster_size < 8){
+		cerr << "Looks like this filesystem's cluster size is really " 
+				"small!\n This could cause problems with reading/writing "
+				"files.\n";
+		problemsFound = true;
+	}
+	else if(MBR->cluster_size > 16){
+		cerr << "This filesystem uses an abnormally large cluster size;\n"
+				"this shouldn't cause problems, however.\n";
+		problemsFound = true;
+	}
+	if(MBR->disk_size < 5){
+		cerr << "Warning! This filesystem is unusually small! This is not "
+				"necessarily a problem, but should be made bigger.\n";
+		problemsFound = true;
+	}
+	else if(MBR->disk_size > 50){
+		cerr << "This filesystem is abnormally large in size;\n"
+				"this shouldn't cause problems, however.\n";
+		problemsFound = true;
+	}
+	
+	// make sure the locations of the directory table/FAT are at least
+	// non-suspect
+	if(MBR->FAT_index < 1){
+		cerr << "The filesystem's FAT appears to be in a non-standard"
+				" location!\n";
+		problemsFound = true;
+	}
+	if(MBR->dir_table_index < 1){
+		cerr << "The filesystem's directory table appears to be in a"
+				"non-standard location!\n";
+		problemsFound = true;
+	}
+	else if(MBR->dir_table_index == MBR->FAT_index){
+		cerr << "The filesystem's FAT and directory table appear to be"
+				" in the same location!\n";
+		problemsFound = true;
+	}
+	
+	return problemsFound;
 }
 
 /*
