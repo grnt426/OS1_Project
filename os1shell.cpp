@@ -62,9 +62,12 @@ int main(int argc, char *argv[]){
 	char* tokens;
 	bool alive;
 	int curHistSize = 0;
-	char fsname[sizeof(argv[1])];
+	char fsname[sizeof(argv[1])+1];
 	FILE * filesystem;
-	memcpy(&fsname, argv[1], sizeof(argv[1])+1);
+	memcpy(&fsname, argv[1], sizeof(argv[1])+2);
+	
+	// make sure we got a clean slate after creating the buffer
+	resetBuf(buf);
 	
 	// check if the filesystem already exists
 	filesystem = fopen(fsname, "r");
@@ -76,74 +79,79 @@ int main(int argc, char *argv[]){
 		// vars
 		int fs_size = 10, fs_csize = 8;
 		
-		// make sure we got a clean slate after creating the buffer
-		resetBuf(buf);
-		
 		// the FS does not exist, let's make sure the user actually wants to
 		// create one
 		printf("Are you sure you want to create a new file system [Y]? ");
 		fflush(stdout);
 		int r = read(0, buf, MAX_BUF_SIZE);
 		
-		// must check for the user saying "no"
+		if(r == 1 || strcmp(buf, "y")){
 		
-		printf("Enter the maximum size for this file system in MB [10]: ");
-		fflush(stdout);
-		resetBuf(buf);
-		r = read(0, buf, MAX_BUF_SIZE);
-		
-		// if we got nothing, then assume the default
-		if(r == 0 || r == 1)
-			fs_size = 10;
-		else{
+			printf("Enter the maximum size for this file system in MB "
+					"[10]: ");
+			fflush(stdout);
+			resetBuf(buf);
+			r = read(0, buf, MAX_BUF_SIZE);
 			fs_size = atoi(buf);
 			
-			if(fs_size == 0 || fs_size > 50 || fs_size < 5){
+			// keep re-asking until a valid value is given
+			while(fs_size > 50 || fs_size < 5){
 				
 				// for now, just exit
-				cerr << buf << " is not a valid filesize.  Valid integer"
+				cerr << "That is not a valid filesize.  Valid integer"
 					 " values are 5..50\n";
-				exit(2);
+				
+				// re-ask the user for the filesystem size
+				printf("Enter the maximum size for this file system in MB "
+						"[10]: ");
+				fflush(stdout);
+				resetBuf(buf);
+				r = read(0, buf, MAX_BUF_SIZE);
+				fs_size = atoi(buf);
 			}
-		}
-		
-		// prompt user for the cluster size
-		printf("Enter the cluster size for this file system in KB [8]: ");
-		fflush(stdout);
-		resetBuf(buf);
-		r = read(0, buf, MAX_BUF_SIZE);
-		
-		// if we got nothing, then assume the default
-		if(r == 0 || r == 1)
-			fs_csize = 8;
-		else{
+			
+			// prompt user for the cluster size
+			printf("Enter the cluster size for this file system in KB [8]: ");
+			fflush(stdout);
+			resetBuf(buf);
+			r = read(0, buf, MAX_BUF_SIZE);
 			fs_csize = atoi(buf);
 			
-			if(fs_csize == 0 || fs_csize > 16 || fs_csize < 8){
-				cerr << buf << " is not a valid cluster size.  Valid integer"
+			// keep re-asking until a valid value is given
+			while(fs_csize > 16 || fs_csize < 8){
+				
+				// for now, just exit
+				cerr << "That is not a valid cluster size.  Valid integer"
 					 " values are 8..16\n";
-				exit(3);
+				
+				// re-ask the user for the filesystem size
+				printf("Enter the cluster size for this file system in KB "
+						"[8]: ");
+				fflush(stdout);
+				resetBuf(buf);
+				r = read(0, buf, MAX_BUF_SIZE);
+				fs_csize = atoi(buf);
 			}
+			
+			// create the struct to store our filesystem data
+			mbr *MBR = (mbr*)malloc(sizeof(mbr));
+			MBR->cluster_size = fs_csize;
+			MBR->disk_size = fs_size;
+			MBR->FAT_index = 1;
+			MBR->dir_table_index = 2;
+			
+			// actually create the filesystem on the disk by "jumping" to the
+			// location of the file that will be the size of our filesystem
+			// close off the file with a NUL-byte
+			filesystem = fopen(fsname, "w");
+			fseek(filesystem, fs_size*1024*1024, SEEK_SET);
+			char zero[] = {'\0'};
+			fwrite(&zero, 1, 1, filesystem);
+			
+			// write the MBR to the filesystem
+			fseek(filesystem, 0, SEEK_SET);
+			fwrite(MBR, sizeof(int), sizeof(MBR), filesystem);
 		}
-		
-		// create the struct to store our filesystem data
-		mbr *MBR = (mbr*)malloc(sizeof(mbr));
-		MBR->cluster_size = fs_csize;
-		MBR->disk_size = fs_size;
-		MBR->FAT_index = 1;
-		MBR->dir_table_index = 2;
-		
-		// actually create the filesystem on the disk by "jumping" to the
-		// location of the file that will be the size of our filesystem
-		// close off the file with a NUL-byte
-		filesystem = fopen(fsname, "w");
-		fseek(filesystem, fs_size*1024*1024, SEEK_SET);
-		char zero[] = {'\0'};
-		fwrite(&zero, 1, 1, filesystem);
-		
-		// write the MBR to the filesystem
-		fseek(filesystem, 0, SEEK_SET);
-		fwrite(MBR, sizeof(int), sizeof(MBR), filesystem);
 	}
 	else{
 		
