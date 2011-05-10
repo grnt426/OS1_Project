@@ -31,25 +31,30 @@ typedef struct node{
 	node *prev;
 };
 
+typedef struct mbr{
+	int cluster_size;
+	int disk_size;
+	int FAT_index;
+	int dir_table_index;
+};
+
 // globals
 node *history = NULL;
 node *tail = NULL;
+char curDirectory[128];
 
 // functions
 void printHistory(node *history);
 void handler_function(int sig_id);
-char *trim(char *str);
+char* trim(char* str);
 void resetBuf(char* buf);
 void processTerminated(int childPID);
+void clearInput();
 
-
+/*
+* The mother of all main functions
+*/
 int main(int argc, char *argv[]){
-	
-	// first, let's check that we got the correct number of arguments
-	if(argc != 2){
-		cerr << "Usage: " << *argv << " filesystem\n";
-		exit(1);
-	}
 
 	// vars
 	char buf[MAX_BUF_SIZE-1];
@@ -58,24 +63,93 @@ int main(int argc, char *argv[]){
 	int curHistSize = 0;
 	char fsname[sizeof(argv[1])];
 	FILE * filesystem;
-	memcpy(&fsname, argv[1], sizeof(argv[1]));
-	
+	memcpy(&fsname, argv[1], sizeof(argv[1])+1);
 	
 	// check if the filesystem already exists
 	filesystem = fopen(fsname, "r");
 	if(!filesystem){
 		
-		// looks like we need to create the filesystem
-		//filesystem = createFileSystem(&fsname);
+		// don't leave the filepointer open
+		fclose(filesystem);
 		
-		// set our newly created filesystem as our current directory
+		// vars
+		int fs_size = 10, fs_csize = 8;
 		
+		// make sure we got a clean slate after creating the buffer
+		resetBuf(buf);
+		
+		// the FS does not exist, let's make sure the user actually wants to
+		// create one
+		printf("Are you sure you want to create a new file system [Y]? ");
+		fflush(stdout);
+		int r = read(0, buf, MAX_BUF_SIZE);
+		
+		// must check for the user saying "no"
+		
+		printf("Enter the maximum size for this file system in MB [10]: ");
+		fflush(stdout);
+		resetBuf(buf);
+		r = read(0, buf, MAX_BUF_SIZE);
+		
+		// if we got nothing, then assume the default
+		if(r == 0 || r == 1)
+			fs_size = 10;
+		else{
+			fs_size = atoi(buf);
+			
+			if(fs_size == 0 || fs_size > 50 || fs_size < 5){
+				
+				// for now, just exit
+				cerr << buf << " is not a valid filesize.  Valid integer"
+					 " values are 5..50\n";
+				exit(2);
+			}
+		}
+		
+		// prompt user for the cluster size
+		printf("Enter the cluster size for this file system in KB [8]: ");
+		fflush(stdout);
+		resetBuf(buf);
+		r = read(0, buf, MAX_BUF_SIZE);
+		
+		// if we got nothing, then assume the default
+		if(r == 0 || r == 1)
+			fs_csize = 8;
+		else{
+			fs_csize = atoi(buf);
+			
+			if(fs_csize == 0 || fs_csize > 16 || fs_csize < 8){
+				cerr << buf << " is not a valid cluster size.  Valid integer"
+					 " values are 8..16\n";
+				exit(3);
+			}
+		}
+		
+		// create the struct to store our filesystem data
+		mbr *MBR = (mbr*)malloc(sizeof(mbr));
+		MBR->cluster_size = fs_csize;
+		MBR->disk_size = fs_size;
+		MBR->FAT_index = 1;
+		MBR->dir_table_index = 2;
+		
+		// actually create the filesystem on the disk by "jumping" to the
+		// location of the file that will be the size of our filesystem
+		// close off the file with a NUL-byte
+		filesystem = fopen(fsname, "w");
+		fseek(filesystem, fs_size*1024*1024, SEEK_SET);
+		char zero[] = {'\0'};
+		fwrite(&zero, 1, 1, filesystem);
+		
+		// write the MBR to the filesystem
+		fseek(filesystem, 0, SEEK_SET);
+		fwrite(MBR, sizeof(int), sizeof(MBR), filesystem);
 	}
 	else{
 		
-		// since the filesystem already exists, load its BR into memory and
+		// since the filesystem already exists, load its MBR into memory and
 		// make sure everything checks out
-		
+		mbr *MBR = (mbr*)malloc(sizeof(mbr));
+		fread(MBR, sizeof(int), sizeof(MBR), filesystem);
 	}
 
 	// define our signal handler
@@ -148,10 +222,7 @@ int main(int argc, char *argv[]){
 		if(r == 64 && buf[63] != '\n'){
 			cerr << "Your command is too long!\n";
 			
-			// clear the input stream
-			int ch = 0;
-			while((ch = getc(stdin)) != EOF && ch != '\n' && ch != '\0');
-			fflush(stdout);
+			clearInput();
 		
 			// clear the buffer
 			resetBuf(buf);
@@ -382,4 +453,9 @@ void resetBuf(char* buf){
 	memset(buf, 0, sizeof(buf));
 }
 
+void clearInput(){
+	int ch = 0;
+	while((ch = getc(stdin)) != EOF && ch != '\n' && ch != '\0');
+	fflush(stdout);
+}
 
