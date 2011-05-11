@@ -169,7 +169,7 @@ int main(int argc, char *argv[]){
 			
 			// actually create the filesystem on the disk by "jumping" to the
 			// location of the file that will be the size of our filesystem
-			// close off the file with a NUL-byte
+			// and closing off the file with a NUL-byte
 			filesystem = fopen(fsname, "w");
 			fseek(filesystem, fs_size*1024*1024, SEEK_SET);
 			char zero[] = {'\0'};
