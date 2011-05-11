@@ -22,7 +22,8 @@ using namespace std;
 // CONSTANTS
 int MAX_BUF_SIZE = 64;
 int MAX_HIST_LEN = 20;
-bool donotread = false;
+unsigned int DEFAULT_CSIZE = 8;
+unsigned int DEFAULT_SIZE = 10;
 
 // a node struct for our doubly-linked list
 typedef struct node{
@@ -32,16 +33,26 @@ typedef struct node{
 };
 
 typedef struct mbr{
-	int cluster_size;
-	int disk_size;
-	int FAT_index;
-	int dir_table_index;
+	unsigned int cluster_size;
+	unsigned int disk_size;
+	unsigned int dir_table_index;
+	unsigned int FAT_index;
+};
+
+typedef struct directory{
+	char name[112];
+	unsigned int index;
+	unsigned int size;
+	unsigned int type;
+	unsigned int timestamp;
 };
 
 // globals
 node *history = NULL;
 node *tail = NULL;
 char curDirectory[128];
+bool donotread = false;
+unsigned int MAX_FILES;
 
 // functions
 void printHistory(node *history);
@@ -61,7 +72,7 @@ int main(int argc, char *argv[]){
 	char buf[MAX_BUF_SIZE-1];
 	char* tokens;
 	bool alive;
-	int curHistSize = 0;
+	unsigned int curHistSize = 0;
 	char fsname[sizeof(argv[1])+1];
 	FILE * filesystem;
 	memcpy(&fsname, argv[1], sizeof(argv[1])+2);
@@ -77,7 +88,7 @@ int main(int argc, char *argv[]){
 		fclose(filesystem);
 		
 		// vars
-		int fs_size = 10, fs_csize = 8;
+		int fs_size, fs_csize;
 		
 		// the FS does not exist, let's make sure the user actually wants to
 		// create one
@@ -92,12 +103,15 @@ int main(int argc, char *argv[]){
 			fflush(stdout);
 			resetBuf(buf);
 			r = read(0, buf, MAX_BUF_SIZE);
-			fs_size = atoi(buf);
+			
+			// the below ternary operator is horrible, will remove in future
+			// update
+			fs_size = r == 1 ? DEFAULT_SIZE : atoi(buf);
 			
 			// keep re-asking until a valid value is given
-			while(fs_size > 50 || fs_size < 5){
+			while(r != 1 && (fs_size > 50 || fs_size < 5)){
 				
-				// for now, just exit
+				// the user can't do that...
 				cerr << "That is not a valid filesize.  Valid integer"
 					 " values are 5..50\n";
 				
@@ -107,7 +121,7 @@ int main(int argc, char *argv[]){
 				fflush(stdout);
 				resetBuf(buf);
 				r = read(0, buf, MAX_BUF_SIZE);
-				fs_size = atoi(buf);
+				fs_size = r == 1 ? DEFAULT_SIZE : atoi(buf);
 			}
 			
 			// prompt user for the cluster size
@@ -115,12 +129,12 @@ int main(int argc, char *argv[]){
 			fflush(stdout);
 			resetBuf(buf);
 			r = read(0, buf, MAX_BUF_SIZE);
-			fs_csize = atoi(buf);
+			fs_csize = r == 1 ? DEFAULT_CSIZE : atoi(buf);
 			
 			// keep re-asking until a valid value is given
-			while(fs_csize > 16 || fs_csize < 8){
+			while(r != 1 && (fs_csize > 16 || fs_csize < 8)){
 				
-				// for now, just exit
+				// the user can't do that...
 				cerr << "That is not a valid cluster size.  Valid integer"
 					 " values are 8..16\n";
 				
@@ -130,15 +144,28 @@ int main(int argc, char *argv[]){
 				fflush(stdout);
 				resetBuf(buf);
 				r = read(0, buf, MAX_BUF_SIZE);
-				fs_csize = atoi(buf);
+				fs_csize = r == 1 ? DEFAULT_CSIZE : atoi(buf);
+			}
+			
+			// now that we have a max filesystem size and a cluster size, we
+			// can compute the maximum number of files that can be recorded
+			MAX_FILES = (fs_size*1024*1024)/(fs_csize*1024);
+			
+			// lets also determine if we can actually store all those records
+			// in our File Allocation Table
+			if(fs_csize*1024 < MAX_FILES*4){
+				cerr << "Whoops! Looks like you need to make the cluster"
+						" size a little larger or reduce the maximum size of"
+						" your filesystem!  The FAT can't fit!\n";
+				exit(1); // for now just exit--later repromt user for data
 			}
 			
 			// create the struct to store our filesystem data
 			mbr *MBR = (mbr*)malloc(sizeof(mbr));
 			MBR->cluster_size = fs_csize;
 			MBR->disk_size = fs_size;
-			MBR->FAT_index = 1;
-			MBR->dir_table_index = 2;
+			MBR->dir_table_index = 1;
+			MBR->FAT_index = 2;
 			
 			// actually create the filesystem on the disk by "jumping" to the
 			// location of the file that will be the size of our filesystem
