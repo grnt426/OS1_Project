@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string>
 #include <signal.h>
+#include <time.h>
 
 using namespace std;
 
@@ -25,8 +26,8 @@ int MAX_HIST_LEN = 20;
 unsigned int RESERVE_CLUSTER = 0xFFFE;
 unsigned int LAST_CLUSTER = 0xFFFF;
 unsigned int FREE_CLUSTER = 0x0000;
-unsigned int DEFAULT_CSIZE = 8;
-unsigned int DEFAULT_SIZE = 10;
+unsigned int DEFAULT_CSIZE = 8; // in KB
+unsigned int DEFAULT_SIZE = 10; // in MB
 unsigned int MEGABYTE = 1024*1024;
 unsigned int KILOBYTE = 1024;
 
@@ -67,6 +68,8 @@ void processTerminated(int childPID);
 void clearInput();
 int checkFSIntegrity(mbr * MBR);
 void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table);
+void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table);
+bool inVirtualFileSystem(char* file_path, char* fs_name);
 
 /*
 * The mother of all main functions
@@ -78,9 +81,9 @@ int main(int argc, char *argv[]){
 	char* tokens;
 	bool alive;
 	unsigned int curHistSize = 0;
-	char fsname[sizeof(argv[1])+1];
+	char fsname[strlen(argv[1])+1];
+	memcpy(&fsname, argv[1], strlen(argv[1])+1);	
 	FILE * filesystem;
-	memcpy(&fsname, argv[1], sizeof(argv[1])+2);
 	directory* files;
 	unsigned int* file_table;
 	
@@ -195,11 +198,22 @@ int main(int argc, char *argv[]){
 			files = (directory*)(malloc(sizeof(directory)*MAX_FILES));
 			file_table = (unsigned int*)(malloc(sizeof(unsigned int)
 				*MAX_FILES));
+				
+			// mark the whole directory table as "available" (which will also
+			// conveniently set the size, type, and creation to default values;
+			// the value of index is worthless for "available" entries)
+			memset(files, sizeof(files), FREE_CLUSTER);
+			
+			// write our directory table to the disk
+			updateDirectoryTable(filesystem, MBR, files);
+				
+			// set all files to "available"
+			memset(file_table, sizeof(file_table), FREE_CLUSTER);
 			
 			// mark the first 3 clusters as reserved and write to our disk
 			file_table[0] = RESERVE_CLUSTER;
 			file_table[1] = RESERVE_CLUSTER;
-			file_table[2] = RESERVE_CLUSTER;			
+			file_table[2] = RESERVE_CLUSTER;
 			updateFileTable(filesystem, MBR, file_table);
 		}
 	}
@@ -212,8 +226,6 @@ int main(int argc, char *argv[]){
 		// do some basic checking to make sure the MBR isn't corrupt or
 		// worthless		
 		if(checkFSIntegrity(MBR) != 0){
-			
-			cerr << "DFsdfd";
 			
 			// prompt user asking if they really want to keep using the
 			// specified filesystem
@@ -541,6 +553,38 @@ char *trim(char *str){
 	return str;
 }
 
+
+/*
+* Assume the path being passed in is an absolute path, ie.
+* '/myfs/my/dir'.  A manual comparison is done instead of copying the whole
+* string.
+*
+*/
+bool inVirtualFileSystem(char* file_path, char* fs_name){
+	
+	// vars
+	int i = 0, plength = strlen(file_path), nlength = strlen(fs_name);
+	
+	// check each character
+	while(i < plength && i != -1){
+		
+		cout << file_path[i+1] << " " << fs_name[i] << endl;
+	
+		if(file_path[i+1] == '/'){
+			break;
+		else if(i > nlength-1)
+			i = -1;
+		else if(file_path[i+1] == fs_name[i])
+			i++;
+		else
+			i = -1;
+	}
+	
+	if(nlength == i)
+		return true;
+	return false;
+}
+
 /*
 * Just prints that a process we had forked and ran in the background finished 
 * running and has exited.
@@ -619,7 +663,60 @@ void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table){
 	
 	// write the modified FAT to the disk
 	fseek(fp, fat_index * cluster_size, SEEK_SET);
-	fwrite(file_table, sizeof(int), sizeof(file_table), fp);
+	fwrite(file_table, sizeof(unsigned int), sizeof(file_table), fp);
+}
+
+void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
+
+	// vars
+	unsigned int dir_index = MBR->dir_table_index;
+	unsigned int cluster_size = MBR->cluster_size;
+	
+	// write the modified FAT to the disk
+	fseek(fp, dir_index * cluster_size, SEEK_SET);
+	fwrite(dir_table, sizeof(directory), sizeof(dir_table), fp);
+}
+
+bool createFile(char* name, unsigned int loc, directory* dir_table, 
+	mbr* MBR, FILE* fp, unsigned int* file_table){
+	
+	// vars
+	unsigned int file_loc = loc*MBR->cluster_size;
+	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
+	bool success = true;
+	unsigned int dir_index = 0;
+	unsigned int file_index = 0;
+	
+	while(file_table[file_index] != FREE_CLUSTER && file_index != MAX_FILES)
+		file_index++;
+	
+	// if the dir_index were to ever be equal, then we somehow filled the disk
+	// with the maximum number of file entries
+	if(MAX_FILES != file_index){
+		
+		// find an available entry in the dir_table ([0] marks the first character
+		// of the name field)
+		while(dir_table[dir_index].name[0] != FREE_CLUSTER && dir_index != MAX_FILES)
+			dir_index++;
+		
+		// write the file name
+		memcpy(dir_table[dir_index].name, name, sizeof(name)+1); // nul-byte!
+		
+		// save the file index
+		file_table[file_index] = LAST_CLUSTER;
+		dir_table[dir_index].index = file_index;
+		
+		// setup the size/type/creation meta-data
+		dir_table[dir_index].size = 0;
+		dir_table[dir_index].type = 0x00;
+		dir_table[dir_index].timestamp = time(NULL);
+	}
+	else{
+		cerr << "Woah! No more room for file entries!\n";
+		success = false;
+	}
+	
+	return success;
 }
 
 void clearInput(){
