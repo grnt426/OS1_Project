@@ -131,6 +131,8 @@ int main(int argc, char *argv[]){
 				fs_size = r == 1 ? DEFAULT_SIZE : atoi(buf);
 			}
 			
+			fs_size = fs_size * MEGABYTE;
+			
 			// prompt user for the cluster size
 			printf("Enter the cluster size for this file system in KB [8]: ");
 			fflush(stdout);
@@ -154,13 +156,15 @@ int main(int argc, char *argv[]){
 				fs_csize = r == 1 ? DEFAULT_CSIZE : atoi(buf);
 			}
 			
+			fs_csize = fs_csize * KILOBYTE;
+			
 			// now that we have a max filesystem size and a cluster size, we
 			// can compute the maximum number of files that can be recorded
-			MAX_FILES = (fs_size*MEGABYTE)/(fs_csize*KILOBYTE);
+			MAX_FILES = (fs_size)/(fs_csize);
 			
 			// lets also determine if we can actually store all those records
 			// in our File Allocation Table
-			if(fs_csize*KILOBYTE < MAX_FILES*4){
+			if(fs_csize < MAX_FILES*4){
 				cerr << "Whoops! Looks like you need to make the cluster"
 						" size a little larger or reduce the maximum size of"
 						" your filesystem!  The FAT can't fit!\n";
@@ -178,7 +182,7 @@ int main(int argc, char *argv[]){
 			// location of the file that will be the size of our filesystem
 			// and closing off the file with a NUL-byte
 			filesystem = fopen(fsname, "w");
-			fseek(filesystem, fs_size*MEGABYTE-1, SEEK_SET);
+			fseek(filesystem, fs_size-1, SEEK_SET);
 			char zero[] = {'\0'};
 			fwrite(&zero, 1, 1, filesystem);
 			
@@ -239,14 +243,12 @@ int main(int argc, char *argv[]){
 		if(MBR != 0){
 			
 			// compute the max number of files
-			MAX_FILES = (MBR->disk_size*MEGABYTE)/(MBR->cluster_size*KILOBYTE);
+			MAX_FILES = (MBR->disk_size)/(MBR->cluster_size);
 			
 			// alright, use the MBR to figure out where the directory table
 			// and file allocation table are located
-			unsigned int dir_loc = MBR->dir_table_index * MBR->cluster_size
-				* KILOBYTE;
-			unsigned int fat_loc = MBR->FAT_index * MBR->cluster_size
-				* KILOBYTE;
+			unsigned int dir_loc = MBR->dir_table_index * MBR->cluster_size;
+			unsigned int fat_loc = MBR->FAT_index * MBR->cluster_size;
 				
 			// create space enough for the tables
 			files = (directory*)(malloc(sizeof(directory)*MAX_FILES));
@@ -258,8 +260,6 @@ int main(int argc, char *argv[]){
 			fread(files, sizeof(directory), MAX_FILES, filesystem);
 			fseek(filesystem, fat_loc, SEEK_SET);
 			fread(file_table, sizeof(int), MAX_FILES, filesystem);
-			
-			
 		}
 	}
 
@@ -559,24 +559,24 @@ int checkFSIntegrity(mbr * MBR){
 	
 	int problemsFound = 0;
 	
-	if(MBR->cluster_size < 8){
+	if(MBR->cluster_size < 8 * KILOBYTE){
 		cerr << "Looks like this filesystem's cluster size is really " 
 				"small!\n This could cause problems with reading/writing "
 				"files.\n";
 		problemsFound++;
 	}
-	else if(MBR->cluster_size > 16){
+	else if(MBR->cluster_size > 16 * KILOBYTE){
 		cerr << "This filesystem uses an abnormally large cluster size;\n"
 				"this shouldn't cause problems, however.\n";
 		problemsFound++;
 	}
 	
-	if(MBR->disk_size < 5){
+	if(MBR->disk_size < 5 * MEGABYTE){
 		cerr << "Warning! This filesystem is unusually small! This is not "
 				"necessarily a problem, but should be made bigger.\n";
 		problemsFound++;
 	}
-	else if(MBR->disk_size > 50){
+	else if(MBR->disk_size > 50 * MEGABYTE){
 		cerr << "This filesystem is abnormally large in size;\n"
 				"this shouldn't cause problems, however.\n";
 		problemsFound++;
@@ -618,7 +618,7 @@ void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table){
 	unsigned int cluster_size = MBR->cluster_size;
 	
 	// write the modified FAT to the disk
-	fseek(fp, fat_index * cluster_size * KILOBYTE, SEEK_SET);
+	fseek(fp, fat_index * cluster_size, SEEK_SET);
 	fwrite(file_table, sizeof(int), sizeof(file_table), fp);
 }
 
