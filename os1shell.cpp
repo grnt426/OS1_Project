@@ -70,6 +70,8 @@ int checkFSIntegrity(mbr * MBR);
 void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table);
 void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table);
 bool inVirtualFileSystem(char* file_path, char* fs_name);
+bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp, 
+	unsigned int* file_table);
 
 /*
 * The mother of all main functions
@@ -80,12 +82,13 @@ int main(int argc, char *argv[]){
 	char buf[MAX_BUF_SIZE-1];
 	char* tokens;
 	bool alive;
+	mbr* MBR;
 	unsigned int curHistSize = 0;
 	char fsname[strlen(argv[1])+1];
 	memcpy(&fsname, argv[1], strlen(argv[1])+1);	
 	FILE * filesystem;
 	directory* files;
-	unsigned int* file_table;
+	unsigned int* file_table;	
 	
 	// make sure we got a clean slate after creating the buffer
 	resetBuf(buf);
@@ -175,7 +178,7 @@ int main(int argc, char *argv[]){
 			}
 			
 			// create the struct to store our filesystem data
-			mbr *MBR = (mbr*)malloc(sizeof(mbr));
+			MBR = (mbr*)malloc(sizeof(mbr));
 			MBR->cluster_size = fs_csize;
 			MBR->disk_size = fs_size;
 			MBR->dir_table_index = 1;
@@ -220,7 +223,7 @@ int main(int argc, char *argv[]){
 	else{
 		
 		// since the filesystem already exists, load its MBR into memory
-		mbr *MBR = (mbr*)malloc(sizeof(mbr));
+		MBR = (mbr*)malloc(sizeof(mbr));
 		fread(MBR, sizeof(int), sizeof(MBR), filesystem);
 		
 		// do some basic checking to make sure the MBR isn't corrupt or
@@ -435,11 +438,31 @@ int main(int argc, char *argv[]){
 		// if we read an argument, pad the end of the array with a nul-byte
 		if(i > 1)
 			args[i-1] = (char*)0;
-		
+			
 		// check if we are running a shell-specific command
 		if(strcmp(buf, "history") == 0){
 			printHistory(history);
 			continue;
+		}
+		else if(strcmp(buf, "touch") == 0){
+			
+			// perform our own version of touch for our fs
+			if(inVirtualFileSystem(args[1], fsname)){
+				
+				// break out the filename
+				
+				// update all the tables
+				createFile(fsname, files, MBR, filesystem, file_table);
+	
+				// write the tables to the disks
+				updateDirectoryTable(filesystem, MBR, files);
+				updateFileTable(filesystem, MBR, file_table);
+				
+				// skip everything else
+				continue;
+			}
+			
+			// if we reached here, then this touch command is a normal one
 		}
 		
 		// Run the command
@@ -567,10 +590,7 @@ bool inVirtualFileSystem(char* file_path, char* fs_name){
 	
 	// check each character
 	while(i < plength && i != -1){
-		
-		cout << file_path[i+1] << " " << fs_name[i] << endl;
-	
-		if(file_path[i+1] == '/'){
+		if(file_path[i+1] == '/')
 			break;
 		else if(i > nlength-1)
 			i = -1;
@@ -677,11 +697,10 @@ void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
 	fwrite(dir_table, sizeof(directory), sizeof(dir_table), fp);
 }
 
-bool createFile(char* name, unsigned int loc, directory* dir_table, 
-	mbr* MBR, FILE* fp, unsigned int* file_table){
+bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp, 
+	unsigned int* file_table){
 	
 	// vars
-	unsigned int file_loc = loc*MBR->cluster_size;
 	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
 	bool success = true;
 	unsigned int dir_index = 0;
