@@ -22,8 +22,13 @@ using namespace std;
 // CONSTANTS
 int MAX_BUF_SIZE = 64;
 int MAX_HIST_LEN = 20;
+unsigned int RESERVE_CLUSTER = 0xFFFE;
+unsigned int LAST_CLUSTER = 0xFFFF;
+unsigned int FREE_CLUSTER = 0x0000;
 unsigned int DEFAULT_CSIZE = 8;
 unsigned int DEFAULT_SIZE = 10;
+unsigned int MEGABYTE = 1024*1024;
+unsigned int KILOBYTE = 1024;
 
 // a node struct for our doubly-linked list
 typedef struct node{
@@ -50,7 +55,6 @@ typedef struct directory{
 // globals
 node *history = NULL;
 node *tail = NULL;
-char curDirectory[128];
 bool donotread = false;
 unsigned int MAX_FILES;
 
@@ -61,7 +65,8 @@ char* trim(char* str);
 void resetBuf(char* buf);
 void processTerminated(int childPID);
 void clearInput();
-bool checkFSIntegrity(mbr * MBR);
+int checkFSIntegrity(mbr * MBR);
+void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table);
 
 /*
 * The mother of all main functions
@@ -76,6 +81,8 @@ int main(int argc, char *argv[]){
 	char fsname[sizeof(argv[1])+1];
 	FILE * filesystem;
 	memcpy(&fsname, argv[1], sizeof(argv[1])+2);
+	directory* files;
+	unsigned int* file_table;
 	
 	// make sure we got a clean slate after creating the buffer
 	resetBuf(buf);
@@ -149,11 +156,11 @@ int main(int argc, char *argv[]){
 			
 			// now that we have a max filesystem size and a cluster size, we
 			// can compute the maximum number of files that can be recorded
-			MAX_FILES = (fs_size*1024*1024)/(fs_csize*1024);
+			MAX_FILES = (fs_size*MEGABYTE)/(fs_csize*KILOBYTE);
 			
 			// lets also determine if we can actually store all those records
 			// in our File Allocation Table
-			if(fs_csize*1024 < MAX_FILES*4){
+			if(fs_csize*KILOBYTE < MAX_FILES*4){
 				cerr << "Whoops! Looks like you need to make the cluster"
 						" size a little larger or reduce the maximum size of"
 						" your filesystem!  The FAT can't fit!\n";
@@ -171,13 +178,25 @@ int main(int argc, char *argv[]){
 			// location of the file that will be the size of our filesystem
 			// and closing off the file with a NUL-byte
 			filesystem = fopen(fsname, "w");
-			fseek(filesystem, fs_size*1024*1024, SEEK_SET);
+			fseek(filesystem, fs_size*MEGABYTE-1, SEEK_SET);
 			char zero[] = {'\0'};
 			fwrite(&zero, 1, 1, filesystem);
 			
 			// write the MBR to the filesystem
 			fseek(filesystem, 0, SEEK_SET);
 			fwrite(MBR, sizeof(int), sizeof(MBR), filesystem);
+			
+			// alright, now that we got all that setup, lets create our 
+			// directory table array and file allocation array
+			files = (directory*)(malloc(sizeof(directory)*MAX_FILES));
+			file_table = (unsigned int*)(malloc(sizeof(unsigned int)
+				*MAX_FILES));
+			
+			// mark the first 3 clusters as reserved and write to our disk
+			file_table[0] = RESERVE_CLUSTER;
+			file_table[1] = RESERVE_CLUSTER;
+			file_table[2] = RESERVE_CLUSTER;			
+			updateFileTable(filesystem, MBR, file_table);
 		}
 	}
 	else{
@@ -188,7 +207,9 @@ int main(int argc, char *argv[]){
 		
 		// do some basic checking to make sure the MBR isn't corrupt or
 		// worthless		
-		if(checkFSIntegrity(MBR)){
+		if(checkFSIntegrity(MBR) != 0){
+			
+			cerr << "DFsdfd";
 			
 			// prompt user asking if they really want to keep using the
 			// specified filesystem
@@ -199,18 +220,46 @@ int main(int argc, char *argv[]){
 				
 				// delete the MBR
 				free(MBR);
+				MBR = 0;
 				
 				// clear the filesystem name
 				memset(fsname, sizeof(fsname), '\0');
 				
 				// let the user know that the filesystem has been discarded
-				cout << "Filesystem not loaded!\n";
+				cerr << "Filesystem not loaded!\n";
 			}
 			
 			// Alright, then the user must know what they are doing!
 			else if(strcmp(buf, "y")){
-				cout << "Alright, the filesystem will try to be loaded...\n";
+				cerr << "Alright, the filesystem will try to be loaded...\n";
 			}
+		}
+		
+		// if we got a non-null MBR, then everything is good to go!
+		if(MBR != 0){
+			
+			// compute the max number of files
+			MAX_FILES = (MBR->disk_size*MEGABYTE)/(MBR->cluster_size*KILOBYTE);
+			
+			// alright, use the MBR to figure out where the directory table
+			// and file allocation table are located
+			unsigned int dir_loc = MBR->dir_table_index * MBR->cluster_size
+				* KILOBYTE;
+			unsigned int fat_loc = MBR->FAT_index * MBR->cluster_size
+				* KILOBYTE;
+				
+			// create space enough for the tables
+			files = (directory*)(malloc(sizeof(directory)*MAX_FILES));
+			file_table = (unsigned int*)(malloc(sizeof(unsigned int)
+				*MAX_FILES));
+			
+			// locate and read the tables in
+			fseek(filesystem, dir_loc, SEEK_SET);
+			fread(files, sizeof(directory), MAX_FILES, filesystem);
+			fseek(filesystem, fat_loc, SEEK_SET);
+			fread(file_table, sizeof(int), MAX_FILES, filesystem);
+			
+			
 		}
 	}
 
@@ -506,48 +555,48 @@ void processTerminated(int childPID){
 		cout << "Child Process terminated: " << childPID << endl;
 }
 
-bool checkFSIntegrity(mbr * MBR){
+int checkFSIntegrity(mbr * MBR){
 	
-	bool problemsFound = false;
+	int problemsFound = 0;
 	
 	if(MBR->cluster_size < 8){
 		cerr << "Looks like this filesystem's cluster size is really " 
 				"small!\n This could cause problems with reading/writing "
 				"files.\n";
-		problemsFound = true;
+		problemsFound++;
 	}
 	else if(MBR->cluster_size > 16){
 		cerr << "This filesystem uses an abnormally large cluster size;\n"
 				"this shouldn't cause problems, however.\n";
-		problemsFound = true;
+		problemsFound++;
 	}
+	
 	if(MBR->disk_size < 5){
 		cerr << "Warning! This filesystem is unusually small! This is not "
 				"necessarily a problem, but should be made bigger.\n";
-		problemsFound = true;
+		problemsFound++;
 	}
 	else if(MBR->disk_size > 50){
 		cerr << "This filesystem is abnormally large in size;\n"
 				"this shouldn't cause problems, however.\n";
-		problemsFound = true;
+		problemsFound++;
 	}
 	
-	// make sure the locations of the directory table/FAT are at least
-	// non-suspect
 	if(MBR->FAT_index < 1){
 		cerr << "The filesystem's FAT appears to be in a non-standard"
 				" location!\n";
-		problemsFound = true;
+		problemsFound++;
 	}
 	if(MBR->dir_table_index < 1){
 		cerr << "The filesystem's directory table appears to be in a"
 				"non-standard location!\n";
-		problemsFound = true;
+		problemsFound++;
 	}
-	else if(MBR->dir_table_index == MBR->FAT_index){
+	
+	if(MBR->dir_table_index == MBR->FAT_index){
 		cerr << "The filesystem's FAT and directory table appear to be"
 				" in the same location!\n";
-		problemsFound = true;
+		problemsFound++;
 	}
 	
 	return problemsFound;
@@ -560,6 +609,17 @@ bool checkFSIntegrity(mbr * MBR){
 */
 void resetBuf(char* buf){
 	memset(buf, 0, sizeof(buf));
+}
+
+void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table){
+	
+	// vars
+	unsigned int fat_index = MBR->FAT_index;
+	unsigned int cluster_size = MBR->cluster_size;
+	
+	// write the modified FAT to the disk
+	fseek(fp, fat_index * cluster_size * KILOBYTE, SEEK_SET);
+	fwrite(file_table, sizeof(int), sizeof(file_table), fp);
 }
 
 void clearInput(){
