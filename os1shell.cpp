@@ -13,9 +13,15 @@
 */
 
 #include <stdio.h>
+#include <iostream>
 #include <signal.h>
 #include <time.h>
 #include <stdbool.h>
+#include <time.h>
+#include <sys/stat.h>
+
+
+using namespace std;
 
 // CONSTANTS
 int MAX_BUF_SIZE = 64;
@@ -23,6 +29,7 @@ int MAX_HIST_LEN = 20;
 unsigned int RESERVE_CLUSTER = 0xFFFE;
 unsigned int LAST_CLUSTER = 0xFFFF;
 unsigned int FREE_CLUSTER = 0x0000;
+unsigned int DELETED_FILE = 0xFF;
 unsigned int DEFAULT_CSIZE = 8; // in KB
 unsigned int DEFAULT_SIZE = 10; // in MB
 unsigned int MEGABYTE = 1024*1024;
@@ -70,6 +77,18 @@ bool inVirtualFileSystem(char* file_path, char* fs_name);
 bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp, 
 	unsigned int* file_table);
 void printDirectoryTree(mbr* MBR, directory* dir_table);
+void deleteFile(directory* files, unsigned int* file_table, int index);
+unsigned int findDirectoryIndexOfFile(directory* files, char* filename);
+void showFileSystemStructure(unsigned int* file_table, mbr* MBR);
+void copyVirtToVirt(char* src, char* dst, mbr* MBR, directory* files, 
+		unsigned int* file_table, FILE* fp);
+void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files, 
+		unsigned int* file_table, FILE* fp);
+char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp);		
+off_t fsize(const char *filename);
+void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp);
+unsigned int findFreeCluster(mbr * MBR, unsigned int * file_table);
+unsigned int findTotalFreeClusterCount();
 
 /*
 * The mother of all main functions
@@ -285,7 +304,7 @@ int main(int argc, char *argv[]){
 	// tell the signal handler that we want to listen to the list of signals
 	// below
 	sigaction(SIGHUP, &signal_action, NULL);
-	sigaction(SIGINT, &signal_action, NULL);
+	// sigaction(SIGINT, &signal_action, NULL);
 	sigaction(SIGQUIT, &signal_action, NULL);
 	sigaction(SIGILL, &signal_action, NULL);
 	sigaction(SIGTRAP, &signal_action, NULL);
@@ -294,7 +313,7 @@ int main(int argc, char *argv[]){
 	sigaction(SIGFPE, &signal_action, NULL);
 	sigaction(SIGKILL, &signal_action, NULL);
 	sigaction(SIGBUS, &signal_action, NULL);
-	sigaction(SIGSEGV, &signal_action, NULL);
+	// sigaction(SIGSEGV, &signal_action, NULL);
 	sigaction(SIGSYS, &signal_action, NULL);
 	sigaction(SIGPIPE, &signal_action, NULL);
 	sigaction(SIGALRM, &signal_action, NULL);
@@ -416,40 +435,47 @@ int main(int argc, char *argv[]){
 		}
 		
 		// tokenize the string
-		char *args[r];
+		char *tokenArgs[r];
 		tokens = strtok(buf, " \n");
 		int i = 0;
 		bool runInBG = false;
 		
-		// read all tokens
-		while((args[i] = tokens) != NULL){
-			tokens = strtok(NULL, " \n");
+		// read all tokens		
+		while(tokens != NULL){
+			// strncpy(tokenArgs[i], tokens, strlen(tokens)+1);
+			
+			tokenArgs[i] = tokens;
 			
 			// if a token contains the &, then we need to run the command
 			// in the background
 			if(tokens != NULL && strcmp(tokens, "&") == 0){
 				runInBG = true;
 			}
+			
 			i++;
+			tokens = strtok(NULL, " \n");
 		}
 		
 		// if we read an argument, pad the end of the array with a nul-byte
 		if(i > 1)
-			args[i-1] = (char*)0;
-			
+			tokenArgs[i] = (char*)0;
+		
+		// determine where this command is going
+		bool argOneInVirt = inVirtualFileSystem(tokenArgs[1], fsname);		
+		bool argTwoInVirt = inVirtualFileSystem(tokenArgs[2], fsname);
+		
 		// check if we are running a shell-specific command
 		if(strncmp(buf, "history", sizeof(buf)) == 0){
 			printHistory(history);
 			continue;
 		}
 		else if(strncmp(buf, "touch", sizeof(buf)) == 0){
-			
-			// perform our own version of touch for our fs
-			if(inVirtualFileSystem(args[1], fsname)){
+			if(argOneInVirt){
 				
 				// break out the filename
-				char* filename = strchr(args[1]+1, '/')+1;
+				char* filename = strchr(tokenArgs[1]+1, '/')+1;
 				
+				// make sure we weren't passed nothing
 				if(strlen(filename) == 0){
 					fprintf(stderr, "What!? No filename?!\n");
 					continue;
@@ -462,7 +488,6 @@ int main(int argc, char *argv[]){
 				updateFileTable(filesystem, MBR, file_table);
 				updateDirectoryTable(filesystem, MBR, files);
 				
-				
 				// skip everything else
 				continue;
 			}
@@ -470,13 +495,65 @@ int main(int argc, char *argv[]){
 			// if we reached here, then this touch command is a normal one
 		}
 		else if(strncmp(buf, "ls", sizeof(buf)) == 0){
-			
-			// perform our own version of ls
-			if(inVirtualFileSystem(args[1], fsname)){
-				
+			if(argOneInVirt){
 				printDirectoryTree(MBR, files);
 				continue;
 			}
+		}
+		else if(strncmp(buf, "rm", sizeof(buf)) == 0){
+			if(argOneInVirt){
+				
+				// break out the filename
+				char* filename = strchr(tokenArgs[1]+1, '/')+1;
+				
+				// make sure we weren't passed nothing
+				if(strlen(filename) == 0){
+					fprintf(stderr, "What!? No filename?!\n");
+					continue;
+				}
+				
+				// locate the file
+				int index = findDirectoryIndexOfFile(files, filename);
+				
+				// we couldn't find the file
+				if(index == 0){
+					fprintf(stderr, "Sorry, that file doesn't seem to exist!\n");
+					continue;
+				}
+				
+				// remove it
+				deleteFile(files, file_table, index);
+				
+				// write the tables to the disks
+				updateFileTable(filesystem, MBR, file_table);
+				updateDirectoryTable(filesystem, MBR, files);
+				
+				continue;
+			}
+		}
+		else if(strncmp(buf, "df", sizeof(buf)) == 0){
+			if(argOneInVirt){
+				showFileSystemStructure(file_table, MBR);
+				continue;
+			}
+		}
+		else if(strncmp(buf, "cp", sizeof(buf)) == 0){
+			if(argOneInVirt && argTwoInVirt){
+				copyVirtToVirt(tokenArgs[1], tokenArgs[2], MBR, files, file_table, 
+						filesystem);
+				continue;
+			}
+			else if(argOneInVirt && !argTwoInVirt){
+				// copyVirtToHost(args[1], args[2], MBR, files, file_table);
+				continue;
+			}
+			else if(!argOneInVirt && argTwoInVirt){			
+				copyHostToVirt(tokenArgs[1], tokenArgs[2], MBR, files, file_table,
+						filesystem);
+				continue;
+			}
+			
+			// otherwise assumet the command is from the host -> host
 		}
 		
 		// Run the command
@@ -490,7 +567,7 @@ int main(int argc, char *argv[]){
 		if(childPID == 0){
 			
 			// execute the command			
-			execvp(args[0], args);
+			execvp(tokenArgs[0], tokenArgs);
 			
 			// if we reached here, the command was invalid
 			cerr << "\nBad command!" << endl;
@@ -599,7 +676,7 @@ char *trim(char *str){
 */
 bool inVirtualFileSystem(char* file_path, char* fs_name){
 	
-	// vars
+	// vars	
 	int i = 0, plength = strlen(file_path), nlength = strlen(fs_name);
 	
 	// check each character
@@ -617,6 +694,129 @@ bool inVirtualFileSystem(char* file_path, char* fs_name){
 	if(nlength == i)
 		return true;
 	return false;
+}
+
+void copyVirtToVirt(char* src, char* dst, mbr* MBR, directory* files, 
+		unsigned int* file_table, FILE* fp){
+	
+}
+
+void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files, 
+		unsigned int* file_table, FILE* filesystem){
+	
+	// vars
+	FILE* host_file;
+	unsigned int cluster_size = MBR->cluster_size, writeIndex;
+	int size;
+	host_file = fopen(src, "r");
+	char buf[cluster_size];
+	
+	// make sure the file actually exists
+	if(host_file == 0){
+		fprintf(stderr, "Sorry, %s does not exist!\n", src);
+		return;
+	}
+	
+	// grab the size of the file, make sure we have enough space!
+	size = fsize(src);
+	rewind(host_file);
+	
+	size -= cluster_size;
+	unsigned int i = 1;
+	while(size > 0){
+	
+		// read from host fs
+		fread(buf, sizeof(char), cluster_size, host_file);
+		
+		// write to virt fs
+		writeIndex = findFreeCluster(MBR, file_table);
+		writeCluster(MBR, writeIndex, buf, filesystem);
+		
+		// move position of host fs, prep for next read
+		fseek(host_file, cluster_size*i, SEEK_SET);
+		size -= cluster_size;
+		i++;
+	}
+	
+	// copy over the last portion, if needed
+	if(size != 0){
+	
+		// reset the size by subtracting out what we tried to "over-read"
+		size = cluster_size - (size*-1);
+		
+		// move to the position right after the last read (or no read)
+		fseek(host_file, cluster_size*(i-1), SEEK_SET);
+		fread(buf, sizeof(char), size, host_file);
+		
+		// write out to virtual fs
+		writeIndex = findFreeCluster(MBR, file_table);
+		writeCluster(MBR, writeIndex, buf, filesystem);
+	}
+	
+}
+
+char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp){
+	
+	// vars
+	unsigned int csize = MBR->cluster_size;
+	unsigned int loc = csize*index;
+	char buf[size];
+	
+	// read the data from the filesystem
+	fseek(fp, loc, SEEK_SET);
+	fread(buf, sizeof(char), size, fp);
+	
+	return buf;
+}
+
+void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp){
+	
+	// vars
+	unsigned int csize = MBR->cluster_size;
+	unsigned int loc = cluster_size*index;
+	
+	// write to our filesystem
+	fseek(fp, loc, SEEK_SET);
+	fwrite(buf, sizeof(char), sizeof(buf), fp);
+}
+
+void readIntoBuffer(char* src, unsigned int size, FILE* fp){
+
+}
+
+/*
+* Returns the size of a given file
+* Source: 7
+*/
+off_t fsize(const char *filename) {
+    struct stat st; 
+
+    if (stat(filename, &st) == 0)
+        return st.st_size;
+
+    return -1; 
+}
+
+
+unsigned int findDirectoryIndexOfFile(directory* files, char* filename){
+
+	// vars
+	unsigned int index = 0;
+
+	while(index < MAX_FILES){
+		if(strncmp(files[index].name, filename, strlen(filename))){
+			return index;
+		}
+		index++;
+	}
+	
+	return 0;
+}
+
+void deleteFile(directory* files, unsigned int* file_table, int index){
+	
+	// mark the file deleted
+	files[index].name[0] = 0xFF;
 }
 
 /*
@@ -712,21 +912,59 @@ void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
 	fwrite(dir_table, sizeof(directory), MAX_FILES, fp);
 }
 
+/*
+* Prints all files currently on the disk
+*
+* Time formatting came from Source: 6
+*/
 void printDirectoryTree(mbr* MBR, directory* dir_table){
 	
 	// vars 
 	unsigned int index = 0;
 	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
-
+	time_t raw;
+	struct tm * timeinfo;
+	char time[80];
+	char *type;
+	if(dir_table[index].type == 0)
+		type = "File";
+	else
+		type = "Directory";
+	
+	// loop through all files
 	while(index < MAX_FILES){
-		if(dir_table[index].name[0] != 0x00){
-			cout << dir_table[index].name << " Cluster #: "
-				<< dir_table[index].index << " Size: " 
-				<< dir_table[index].size << "KB" << " Type: "
-				<< dir_table[index].type << " Created: "
-				<< dir_table[index].timestamp << endl;
+		if(dir_table[index].name[0] != 0x00 && dir_table[index].name[0] != 0xFF){
+			
+			// format the time
+			raw = dir_table[index].timestamp;
+			timeinfo = localtime(&raw);
+			strftime(time, 80, "%B %d, %Y %X",timeinfo);
+		
+			// print the file meta-data
+			cout << dir_table[index].name << " " << dir_table[index].size 
+				<< "KB" << " Cluster #: " << dir_table[index].index 
+				<< " Type: " << type 
+				<< " @ " << time << endl;
 		}
 		index++;
+	}
+}
+
+void showFileSystemStructure(unsigned int* file_table, mbr* MBR){
+	
+	// vars
+	int i = 0, k = 0;
+	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
+	
+	while(i < MAX_FILES-1){
+		cout << "Cluster: " << i;
+		k = file_table[i];
+		while(k != LAST_CLUSTER && k != 0 && k != RESERVE_CLUSTER){
+			cerr << " -> " << k;
+			k = file_table[i];
+		}
+		i++;
+		cout << endl;
 	}
 }
 
@@ -771,8 +1009,21 @@ bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp,
 	return success;
 }
 
+unsigned int findFreeCluster(mbr * MBR, unsigned int * file_table){
+	unsigned int file_index = 0;
+	while(file_table[file_index] != FREE_CLUSTER && file_index != MAX_FILES)
+		file_index++;
+	
+	return file_index;
+}
+
+unsigned int findTotalFreeClusterCount(){
+
+}
+
 void clearInput(){
 	int ch = 0;
 	while((ch = getc(stdin)) != EOF && ch != '\n' && ch != '\0');
 	fflush(stdout);
 }
+
