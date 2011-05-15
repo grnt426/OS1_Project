@@ -89,6 +89,7 @@ off_t fsize(const char *filename);
 void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp);
 unsigned int findFreeCluster(mbr * MBR, unsigned int * file_table);
 unsigned int findTotalFreeClusterCount();
+unsigned int findFreeDirEntry(mbr* MBR, directory* dir_table);
 
 /*
 * The mother of all main functions
@@ -701,15 +702,17 @@ void copyVirtToVirt(char* src, char* dst, mbr* MBR, directory* files,
 	
 }
 
-void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files, 
+void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* dir_table, 
 		unsigned int* file_table, FILE* filesystem){
 	
 	// vars
 	FILE* host_file;
-	unsigned int cluster_size = MBR->cluster_size, writeIndex;
+	unsigned int cluster_size = MBR->cluster_size, writeIndex, prevIndex;
 	int size;
 	host_file = fopen(src, "r");
 	char buf[cluster_size];
+	
+	// makes sure the file name isn't too long
 	
 	// make sure the file actually exists
 	if(host_file == 0){
@@ -719,22 +722,46 @@ void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files,
 	
 	// grab the size of the file, make sure we have enough space!
 	size = fsize(src);
+	
+	
+	
+	// create an entry in the dir_table
+	unsigned int dir_index = findFreeDirEntry(MBR, dir_table);
+	
+	// write the file name
+	strcpy(dir_table[dir_index].name, src);
+	
+	// setup the size/type/creation meta-data
+	dir_table[dir_index].size = 0;
+	dir_table[dir_index].type = 0x00;
+	dir_table[dir_index].timestamp = time(NULL);
+	
+	// go back to start
 	rewind(host_file);
 	
+	// prep for reading
 	size -= cluster_size;
 	unsigned int i = 1;
+	writeIndex = findFreeCluster(MBR, file_table);
+	prevIndex = writeIndex;
+	dir_table[dir_index].index = writeIndex; // set this since we have it now
+	
+	// read so long as we have data left!
 	while(size > 0){
 	
+		file_table[prevIndex] = writeIndex;
+		prevIndex = writeIndex;
+		
 		// read from host fs
 		fread(buf, sizeof(char), cluster_size, host_file);
 		
 		// write to virt fs
-		writeIndex = findFreeCluster(MBR, file_table);
 		writeCluster(MBR, writeIndex, buf, filesystem);
 		
 		// move position of host fs, prep for next read
 		fseek(host_file, cluster_size*i, SEEK_SET);
 		size -= cluster_size;
+		writeIndex = findFreeCluster(MBR, file_table);
 		i++;
 	}
 	
@@ -751,8 +778,14 @@ void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files,
 		// write out to virtual fs
 		writeIndex = findFreeCluster(MBR, file_table);
 		writeCluster(MBR, writeIndex, buf, filesystem);
+		
+		// update the tables
+		file_table[writeIndex] = LAST_CLUSTER;
 	}
 	
+	// lastly, write the tables to disk!
+	updateFileTable(filesystem, MBR, file_table);
+	updateDirectoryTable(filesystem, MBR, dir_table);
 }
 
 char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp){
@@ -772,7 +805,7 @@ char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp){
 void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp){
 	
 	// vars
-	unsigned int csize = MBR->cluster_size;
+	unsigned int cluster_size = MBR->cluster_size;
 	unsigned int loc = cluster_size*index;
 	
 	// write to our filesystem
@@ -1009,12 +1042,45 @@ bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp,
 	return success;
 }
 
+void printFile(mbr * MBR, unsigned int * file_table, directory * dir_table,
+		char* filename, FILE* filesystem){
+	
+	// vars
+	unsigned int dir_loc = findDirectoryIndexOfFile(dir_table, filename),
+		read_index = dir_table[dir_loc].index,
+		cluster_size = MBR->cluster_size;
+	char buf[cluster_size];
+	
+	// initial read
+	fseek(filesystem, read_index*cluster_size, SEEK_SET);
+	fread(buf, sizeof(char), cluster_size, filesystem);
+	cout << buf;
+	
+	// read in all linked clusters
+	while((read_index = file_table[read_index]) != LAST_CLUSTER){
+		fseek(filesystem, read_index*cluster_size, SEEK_SET);
+		fread(buf, sizeof(char), cluster_size, filesystem);
+		cout << buf;
+	}
+}
+	
+
 unsigned int findFreeCluster(mbr * MBR, unsigned int * file_table){
-	unsigned int file_index = 0;
+	unsigned int file_index = 0, 
+		MAX_FILES = MBR->disk_size / MBR->cluster_size;
 	while(file_table[file_index] != FREE_CLUSTER && file_index != MAX_FILES)
 		file_index++;
 	
 	return file_index;
+}
+
+unsigned int findFreeDirEntry(mbr* MBR, directory* dir_table){
+	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size,
+		dir_index = 0;
+	while(dir_table[dir_index].name[0] != FREE_CLUSTER && dir_index != MAX_FILES)
+			dir_index++;
+	
+	return dir_index;
 }
 
 unsigned int findTotalFreeClusterCount(){
