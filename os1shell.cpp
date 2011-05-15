@@ -12,13 +12,10 @@
 *
 */
 
-#include <iostream>
 #include <stdio.h>
-#include <string>
 #include <signal.h>
 #include <time.h>
-
-using namespace std;
+#include <stdbool.h>
 
 // CONSTANTS
 int MAX_BUF_SIZE = 64;
@@ -72,6 +69,7 @@ void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table);
 bool inVirtualFileSystem(char* file_path, char* fs_name);
 bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp, 
 	unsigned int* file_table);
+void printDirectoryTree(mbr* MBR, directory* dir_table);
 
 /*
 * The mother of all main functions
@@ -266,9 +264,9 @@ int main(int argc, char *argv[]){
 			unsigned int fat_loc = MBR->FAT_index * MBR->cluster_size;
 				
 			// create space enough for the tables
-			files = (directory*)(malloc(sizeof(directory)*MAX_FILES));
-			file_table = (unsigned int*)(malloc(sizeof(unsigned int)
-				*MAX_FILES));
+			files = (directory*)(calloc(MAX_FILES, sizeof(directory)));
+			file_table = (unsigned int*)(calloc(MAX_FILES, 
+				sizeof(unsigned int)));
 			
 			// locate and read the tables in
 			fseek(filesystem, dir_loc, SEEK_SET);
@@ -334,7 +332,7 @@ int main(int argc, char *argv[]){
 		// if nothing was read, assume ^D was sent
 		if(r == 0){
 			cout << endl;
-			return 0;
+			exit(EXIT_SUCCESS);
 		}
 		
 		// if we read a single character, assume nothing was sent
@@ -440,29 +438,45 @@ int main(int argc, char *argv[]){
 			args[i-1] = (char*)0;
 			
 		// check if we are running a shell-specific command
-		if(strcmp(buf, "history") == 0){
+		if(strncmp(buf, "history", sizeof(buf)) == 0){
 			printHistory(history);
 			continue;
 		}
-		else if(strcmp(buf, "touch") == 0){
+		else if(strncmp(buf, "touch", sizeof(buf)) == 0){
 			
 			// perform our own version of touch for our fs
 			if(inVirtualFileSystem(args[1], fsname)){
 				
 				// break out the filename
+				char* filename = strchr(args[1]+1, '/')+1;
+				
+				if(strlen(filename) == 0){
+					fprintf(stderr, "What!? No filename?!\n");
+					continue;
+				}
 				
 				// update all the tables
-				createFile(fsname, files, MBR, filesystem, file_table);
+				createFile(filename, files, MBR, filesystem, file_table);
 	
 				// write the tables to the disks
-				updateDirectoryTable(filesystem, MBR, files);
 				updateFileTable(filesystem, MBR, file_table);
+				updateDirectoryTable(filesystem, MBR, files);
+				
 				
 				// skip everything else
 				continue;
 			}
 			
 			// if we reached here, then this touch command is a normal one
+		}
+		else if(strncmp(buf, "ls", sizeof(buf)) == 0){
+			
+			// perform our own version of ls
+			if(inVirtualFileSystem(args[1], fsname)){
+				
+				printDirectoryTree(MBR, files);
+				continue;
+			}
 		}
 		
 		// Run the command
@@ -691,10 +705,29 @@ void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
 	// vars
 	unsigned int dir_index = MBR->dir_table_index;
 	unsigned int cluster_size = MBR->cluster_size;
+	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
 	
 	// write the modified FAT to the disk
 	fseek(fp, dir_index * cluster_size, SEEK_SET);
-	fwrite(dir_table, sizeof(directory), sizeof(dir_table), fp);
+	fwrite(dir_table, sizeof(directory), MAX_FILES, fp);
+}
+
+void printDirectoryTree(mbr* MBR, directory* dir_table){
+	
+	// vars 
+	unsigned int index = 0;
+	unsigned int MAX_FILES = MBR->disk_size / MBR->cluster_size;
+
+	while(index < MAX_FILES){
+		if(dir_table[index].name[0] != 0x00){
+			cout << dir_table[index].name << " Cluster #: "
+				<< dir_table[index].index << " Size: " 
+				<< dir_table[index].size << "KB" << " Type: "
+				<< dir_table[index].type << " Created: "
+				<< dir_table[index].timestamp << endl;
+		}
+		index++;
+	}
 }
 
 bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp, 
@@ -719,7 +752,7 @@ bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp,
 			dir_index++;
 		
 		// write the file name
-		memcpy(dir_table[dir_index].name, name, sizeof(name)+1); // nul-byte!
+		memcpy(dir_table[dir_index].name, name, strlen(name)+1); // nul-byte!
 		
 		// save the file index
 		file_table[file_index] = LAST_CLUSTER;
@@ -731,7 +764,7 @@ bool createFile(char* name, directory* dir_table, mbr* MBR, FILE* fp,
 		dir_table[dir_index].timestamp = time(NULL);
 	}
 	else{
-		cerr << "Woah! No more room for file entries!\n";
+		fprintf(stderr, "Woah! No more room for file entries!\n");
 		success = false;
 	}
 	
@@ -743,4 +776,3 @@ void clearInput(){
 	while((ch = getc(stdin)) != EOF && ch != '\n' && ch != '\0');
 	fflush(stdout);
 }
-
