@@ -83,13 +83,15 @@ void showFileSystemStructure(unsigned int* file_table, mbr* MBR);
 void copyVirtToVirt(char* src, char* dst, mbr* MBR, directory* files, 
 		unsigned int* file_table, FILE* fp);
 void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* files, 
-		unsigned int* file_table, FILE* fp);
+		unsigned int* file_table, FILE* fp, char* fsname);
 char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp);		
 off_t fsize(const char *filename);
 void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp);
 unsigned int findFreeCluster(mbr * MBR, unsigned int * file_table);
 unsigned int findTotalFreeClusterCount();
 unsigned int findFreeDirEntry(mbr* MBR, directory* dir_table);
+void printFile(mbr * MBR, unsigned int * file_table, directory * dir_table,
+		char* filename, FILE* filesystem);
 
 /*
 * The mother of all main functions
@@ -106,7 +108,7 @@ int main(int argc, char *argv[]){
 	memcpy(&fsname, argv[1], strlen(argv[1])+1);	
 	FILE * filesystem;
 	directory* files;
-	unsigned int* file_table;	
+	unsigned int* file_table;
 	
 	// make sure we got a clean slate after creating the buffer
 	resetBuf(buf);
@@ -209,10 +211,14 @@ int main(int argc, char *argv[]){
 			fseek(filesystem, fs_size-1, SEEK_SET);
 			char zero[] = {'\0'};
 			fwrite(&zero, 1, 1, filesystem);
+			fclose(filesystem);
 			
 			// write the MBR to the filesystem
+			filesystem = fopen(fsname, "r+");
 			fseek(filesystem, 0, SEEK_SET);
 			fwrite(MBR, sizeof(int), sizeof(MBR), filesystem);
+			fclose(filesystem);
+			filesystem = fopen(fsname, "r+");
 			
 			// alright, now that we got all that setup, lets create our 
 			// directory table array and file allocation array
@@ -241,6 +247,7 @@ int main(int argc, char *argv[]){
 	else{
 		
 		// since the filesystem already exists, load its MBR into memory
+		filesystem = fopen(fsname, "r+");
 		MBR = (mbr*)malloc(sizeof(mbr));
 		fread(MBR, sizeof(int), sizeof(MBR), filesystem);
 		
@@ -292,7 +299,7 @@ int main(int argc, char *argv[]){
 			fseek(filesystem, dir_loc, SEEK_SET);
 			fread(files, sizeof(directory), MAX_FILES, filesystem);
 			fseek(filesystem, fat_loc, SEEK_SET);
-			fread(file_table, sizeof(int), MAX_FILES, filesystem);
+			fread(file_table, sizeof(unsigned int), MAX_FILES, filesystem);
 		}
 	}
 
@@ -437,6 +444,7 @@ int main(int argc, char *argv[]){
 		
 		// tokenize the string
 		char *tokenArgs[r];
+		memset(tokenArgs, 0, r);
 		tokens = strtok(buf, " \n");
 		int i = 0;
 		bool runInBG = false;
@@ -462,8 +470,12 @@ int main(int argc, char *argv[]){
 			tokenArgs[i] = (char*)0;
 		
 		// determine where this command is going
-		bool argOneInVirt = inVirtualFileSystem(tokenArgs[1], fsname);		
-		bool argTwoInVirt = inVirtualFileSystem(tokenArgs[2], fsname);
+		bool argOneInVirt = false;
+		if(i > 1)
+			argOneInVirt = inVirtualFileSystem(tokenArgs[1], fsname);
+		bool argTwoInVirt = false;
+		if(i > 2)
+			argTwoInVirt = inVirtualFileSystem(tokenArgs[2], fsname);
 		
 		// check if we are running a shell-specific command
 		if(strncmp(buf, "history", sizeof(buf)) == 0){
@@ -487,7 +499,9 @@ int main(int argc, char *argv[]){
 	
 				// write the tables to the disks
 				updateFileTable(filesystem, MBR, file_table);
+				filesystem = fopen(fsname, "r+");
 				updateDirectoryTable(filesystem, MBR, files);
+				filesystem = fopen(fsname, "r+");
 				
 				// skip everything else
 				continue;
@@ -527,8 +541,9 @@ int main(int argc, char *argv[]){
 				
 				// write the tables to the disks
 				updateFileTable(filesystem, MBR, file_table);
+				filesystem = fopen(fsname, "r+");
 				updateDirectoryTable(filesystem, MBR, files);
-				
+				filesystem = fopen(fsname, "r+");
 				continue;
 			}
 		}
@@ -538,7 +553,7 @@ int main(int argc, char *argv[]){
 				continue;
 			}
 		}
-		else if(strncmp(buf, "cp", sizeof(buf)) == 0){
+		else if(strncmp(buf, "cp", sizeof(buf)) == 0){		
 			if(argOneInVirt && argTwoInVirt){
 				copyVirtToVirt(tokenArgs[1], tokenArgs[2], MBR, files, file_table, 
 						filesystem);
@@ -548,13 +563,40 @@ int main(int argc, char *argv[]){
 				// copyVirtToHost(args[1], args[2], MBR, files, file_table);
 				continue;
 			}
-			else if(!argOneInVirt && argTwoInVirt){			
-				copyHostToVirt(tokenArgs[1], tokenArgs[2], MBR, files, file_table,
-						filesystem);
+			else if(!argOneInVirt && argTwoInVirt){	
+
+				// break out the filename
+				char* filename = strchr(tokenArgs[2]+1, '/')+1;
+				
+				// make sure we weren't passed nothing
+				if(strlen(filename) == 0){
+					fprintf(stderr, "What!? No filename?!\n");
+					continue;
+				}
+			
+				copyHostToVirt(tokenArgs[1], filename, MBR, files, file_table,
+						filesystem, fsname);
 				continue;
 			}
 			
 			// otherwise assumet the command is from the host -> host
+		}
+		else if(strncmp(buf, "cat", sizeof(buf)) == 0){
+			if(argOneInVirt){
+				
+				// break out the filename
+				char* filename = strchr(tokenArgs[1]+1, '/')+1;
+				
+				// make sure we weren't passed nothing
+				if(strlen(filename) == 0){
+					fprintf(stderr, "What!? No filename?!\n");
+					continue;
+				}
+				
+				printFile(MBR, file_table, files, filename, filesystem);
+				
+				continue;
+			}
 		}
 		
 		// Run the command
@@ -563,6 +605,8 @@ int main(int argc, char *argv[]){
 		
 		// create a new process
 		childPID = fork();
+		
+		cerr << tokenArgs[1] << " " << tokenArgs[2] << endl;
 		
 		// If zero, then this is the child running
 		if(childPID == 0){
@@ -703,13 +747,12 @@ void copyVirtToVirt(char* src, char* dst, mbr* MBR, directory* files,
 }
 
 void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* dir_table, 
-		unsigned int* file_table, FILE* filesystem){
+		unsigned int* file_table, FILE* filesystem, char* fsname){
 	
 	// vars
-	FILE* host_file;
 	unsigned int cluster_size = MBR->cluster_size, writeIndex, prevIndex;
 	int size;
-	host_file = fopen(src, "r");
+	FILE* host_file = fopen(src, "r");
 	char buf[cluster_size];
 	
 	// makes sure the file name isn't too long
@@ -729,77 +772,66 @@ void copyHostToVirt(char* src, char* dst, mbr* MBR, directory* dir_table,
 	unsigned int dir_index = findFreeDirEntry(MBR, dir_table);
 	
 	// write the file name
-	strcpy(dir_table[dir_index].name, src);
+	strcpy(dir_table[dir_index].name, dst);
 	
 	// setup the size/type/creation meta-data
-	dir_table[dir_index].size = 0;
+	dir_table[dir_index].size = size;
 	dir_table[dir_index].type = 0x00;
 	dir_table[dir_index].timestamp = time(NULL);
 	
-	// go back to start
-	rewind(host_file);
-	
 	// prep for reading
-	size -= cluster_size;
-	unsigned int i = 1;
+	unsigned int i = 0;
+	unsigned int readOff = cluster_size;
 	writeIndex = findFreeCluster(MBR, file_table);
 	prevIndex = writeIndex;
 	dir_table[dir_index].index = writeIndex; // set this since we have it now
+	memset(buf, 0, cluster_size);
 	
 	// read so long as we have data left!
-	while(size > 0){
+	while(size != 0){
 	
+		if(size > cluster_size)
+			size -= cluster_size;
+		else{
+			readOff = size;
+			size = 0;
+		}
+		
 		file_table[prevIndex] = writeIndex;
 		prevIndex = writeIndex;
 		
 		// read from host fs
-		fread(buf, sizeof(char), cluster_size, host_file);
-		
-		// write to virt fs
-		writeCluster(MBR, writeIndex, buf, filesystem);
-		
-		// move position of host fs, prep for next read
 		fseek(host_file, cluster_size*i, SEEK_SET);
-		size -= cluster_size;
+		fread(buf, sizeof(char), readOff, host_file);
+		
+		// write to virtual filesystem
+		writeCluster(MBR, writeIndex, buf, filesystem);
+		filesystem = fopen(fsname, "r+");
+		
+		// prep for next read
 		writeIndex = findFreeCluster(MBR, file_table);
 		i++;
 	}
 	
-	// copy over the last portion, if needed
-	if(size != 0){
+	file_table[prevIndex] = LAST_CLUSTER;
 	
-		// reset the size by subtracting out what we tried to "over-read"
-		size = cluster_size - (size*-1);
-		
-		// move to the position right after the last read (or no read)
-		fseek(host_file, cluster_size*(i-1), SEEK_SET);
-		fread(buf, sizeof(char), size, host_file);
-		
-		// write out to virtual fs
-		writeIndex = findFreeCluster(MBR, file_table);
-		writeCluster(MBR, writeIndex, buf, filesystem);
-		
-		// update the tables
-		file_table[writeIndex] = LAST_CLUSTER;
-	}
 	
 	// lastly, write the tables to disk!
 	updateFileTable(filesystem, MBR, file_table);
+	filesystem = fopen(fsname, "r+");
 	updateDirectoryTable(filesystem, MBR, dir_table);
+	filesystem = fopen(fsname, "r+");
 }
 
-char* readCluster(mbr* MBR, unsigned int index, unsigned int size, FILE* fp){
+void readCluster(mbr* MBR, char* buf, unsigned int index, unsigned int size, FILE* fp){
 	
 	// vars
 	unsigned int csize = MBR->cluster_size;
 	unsigned int loc = csize*index;
-	char buf[size];
 	
 	// read the data from the filesystem
 	fseek(fp, loc, SEEK_SET);
 	fread(buf, sizeof(char), size, fp);
-	
-	return buf;
 }
 
 void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp){
@@ -808,9 +840,15 @@ void writeCluster(mbr* MBR, unsigned int index, char* buf, FILE* fp){
 	unsigned int cluster_size = MBR->cluster_size;
 	unsigned int loc = cluster_size*index;
 	
+	cerr << buf << endl;
+	
 	// write to our filesystem
 	fseek(fp, loc, SEEK_SET);
-	fwrite(buf, sizeof(char), sizeof(buf), fp);
+	int r = fwrite(buf, sizeof(char), cluster_size, fp);
+	cerr << r;
+	fflush(fp);
+	fflush(NULL);
+	fclose(fp);
 }
 
 void readIntoBuffer(char* src, unsigned int size, FILE* fp){
@@ -836,8 +874,8 @@ unsigned int findDirectoryIndexOfFile(directory* files, char* filename){
 	// vars
 	unsigned int index = 0;
 
-	while(index < MAX_FILES){
-		if(strncmp(files[index].name, filename, strlen(filename))){
+	while(index < MAX_FILES){	
+		if(strncmp(files[index].name, filename, strlen(filename)) == 0){
 			return index;
 		}
 		index++;
@@ -919,7 +957,7 @@ int checkFSIntegrity(mbr * MBR){
 * @param	buf				character array to be cleaned up
 */
 void resetBuf(char* buf){
-	memset(buf, 0, sizeof(buf));
+	memset(buf, 0, strlen(buf));
 }
 
 void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table){
@@ -931,6 +969,7 @@ void updateFileTable(FILE* fp, mbr* MBR, unsigned int* file_table){
 	// write the modified FAT to the disk
 	fseek(fp, fat_index * cluster_size, SEEK_SET);
 	fwrite(file_table, sizeof(unsigned int), sizeof(file_table), fp);
+	fclose(fp);
 }
 
 void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
@@ -943,6 +982,7 @@ void updateDirectoryTable(FILE* fp, mbr* MBR, directory* dir_table){
 	// write the modified FAT to the disk
 	fseek(fp, dir_index * cluster_size, SEEK_SET);
 	fwrite(dir_table, sizeof(directory), MAX_FILES, fp);
+	fclose(fp);
 }
 
 /*
@@ -975,7 +1015,7 @@ void printDirectoryTree(mbr* MBR, directory* dir_table){
 		
 			// print the file meta-data
 			cout << dir_table[index].name << " " << dir_table[index].size 
-				<< "KB" << " Cluster #: " << dir_table[index].index 
+				<< "B" << " Cluster #: " << dir_table[index].index 
 				<< " Type: " << type 
 				<< " @ " << time << endl;
 		}
@@ -993,8 +1033,8 @@ void showFileSystemStructure(unsigned int* file_table, mbr* MBR){
 		cout << "Cluster: " << i;
 		k = file_table[i];
 		while(k != LAST_CLUSTER && k != 0 && k != RESERVE_CLUSTER){
-			cerr << " -> " << k;
-			k = file_table[i];
+			cout << " -> " << k;
+			k = file_table[k];
 		}
 		i++;
 		cout << endl;
@@ -1049,19 +1089,31 @@ void printFile(mbr * MBR, unsigned int * file_table, directory * dir_table,
 	unsigned int dir_loc = findDirectoryIndexOfFile(dir_table, filename),
 		read_index = dir_table[dir_loc].index,
 		cluster_size = MBR->cluster_size;
+	int size = dir_table[dir_loc].size;
 	char buf[cluster_size];
+	memset(buf, 0, sizeof(buf));
 	
 	// initial read
-	fseek(filesystem, read_index*cluster_size, SEEK_SET);
-	fread(buf, sizeof(char), cluster_size, filesystem);
-	cout << buf;
+	int readOff = cluster_size;
 	
 	// read in all linked clusters
-	while((read_index = file_table[read_index]) != LAST_CLUSTER){
-		fseek(filesystem, read_index*cluster_size, SEEK_SET);
-		fread(buf, sizeof(char), cluster_size, filesystem);
+	while(size != 0){
+		
+		if(size > cluster_size)
+			size -= cluster_size;
+		else{
+			readOff = size;
+			size = 0;
+		}
+		
+		cerr << read_index*cluster_size << endl;
+		
+		readCluster(MBR, buf, read_index, readOff, filesystem);
 		cout << buf;
+		read_index = file_table[read_index];
 	}
+	cout << endl;
+	fflush(stdout);
 }
 	
 
